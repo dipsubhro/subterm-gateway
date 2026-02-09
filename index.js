@@ -1,8 +1,8 @@
-require("dotenv").config();
+import "dotenv/config";
 
-const express = require("express");
-const cors = require("cors");
-const Dockerode = require("dockerode");
+import express from "express";
+import cors from "cors";
+import Dockerode from "dockerode";
 
 const app = express();
 app.use(express.json());
