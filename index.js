@@ -13,6 +13,25 @@ const docker = new Dockerode({
 });
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || "subterm-server";
 
+const activeContainers = new Set();
+
+async function shutdown() {
+  console.log("[gateway] Shutting down — stopping all containers...");
+  await Promise.allSettled(
+    [...activeContainers].map((id) =>
+      docker
+        .getContainer(id)
+        .stop()
+        .catch(() => {}),
+    ),
+  );
+  console.log("[gateway] All containers stopped. Exiting.");
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
 // POST /api/container — spin up a new sandbox container, return its host port
 app.post("/api/container", async (req, res) => {
   try {
@@ -27,6 +46,7 @@ app.post("/api/container", async (req, res) => {
     });
 
     await container.start();
+    activeContainers.add(container.id);
 
     const info = await container.inspect();
     const hostPort = info.NetworkSettings.Ports["3334/tcp"][0].HostPort;
@@ -34,6 +54,12 @@ app.post("/api/container", async (req, res) => {
     console.log(
       `[gateway] Started container ${container.id.slice(0, 12)} on host port ${hostPort}`,
     );
+
+    // Clean up tracking when the container stops on its own
+    container
+      .wait()
+      .then(() => activeContainers.delete(container.id))
+      .catch(() => {});
 
     res.json({ containerId: container.id, hostPort: parseInt(hostPort) });
   } catch (err) {
