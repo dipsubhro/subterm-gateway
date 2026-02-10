@@ -35,6 +35,8 @@ process.on("SIGTERM", shutdown);
 // POST /api/container — spin up a new sandbox container, return its host port
 app.post("/api/container", async (req, res) => {
   try {
+    const NETWORK_NAME = process.env.SANDBOX_NETWORK || "subterm-net";
+
     const container = await docker.createContainer({
       Image: SANDBOX_IMAGE,
       Tty: false,
@@ -42,6 +44,7 @@ app.post("/api/container", async (req, res) => {
       HostConfig: {
         PortBindings: { "3334/tcp": [{ HostPort: "0" }] }, // 0 = random port
         AutoRemove: true,
+        NetworkMode: NETWORK_NAME,
       },
     });
 
