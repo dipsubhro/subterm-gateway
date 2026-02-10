@@ -1,5 +1,6 @@
 import "dotenv/config";
 
+import crypto from "crypto";
 import express from "express";
 import cors from "cors";
 import Dockerode from "dockerode";
@@ -13,14 +14,15 @@ const docker = new Dockerode({
 });
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || "subterm-server";
 
-const activeContainers = new Set();
+// sessionId → { containerName, createdAt, lastActive }
+const sessions = {};
 
 async function shutdown() {
   console.log("[gateway] Shutting down — stopping all containers...");
   await Promise.allSettled(
-    [...activeContainers].map((id) =>
+    Object.values(sessions).map(({ containerName }) =>
       docker
-        .getContainer(id)
+        .getContainer(containerName)
         .stop()
         .catch(() => {}),
     ),
@@ -37,8 +39,13 @@ app.post("/api/container", async (req, res) => {
   try {
     const NETWORK_NAME = process.env.SANDBOX_NETWORK || "subterm-net";
 
+    // Cryptographically secure session ID
+    const sessionId = crypto.randomBytes(16).toString("hex");
+    const containerName = `sess_${sessionId}`;
+
     const container = await docker.createContainer({
       Image: SANDBOX_IMAGE,
+      name: containerName,
       Tty: false,
       ExposedPorts: { "3334/tcp": {} },
       HostConfig: {
@@ -49,22 +56,28 @@ app.post("/api/container", async (req, res) => {
     });
 
     await container.start();
-    activeContainers.add(container.id);
+
+    const now = Date.now();
+    sessions[sessionId] = {
+      containerName,
+      createdAt: now,
+      lastActive: now,
+    };
 
     const info = await container.inspect();
     const hostPort = info.NetworkSettings.Ports["3334/tcp"][0].HostPort;
 
     console.log(
-      `[gateway] Started container ${container.id.slice(0, 12)} on host port ${hostPort}`,
+      `[gateway] Started container ${containerName} (${container.id.slice(0, 12)}) on host port ${hostPort}`,
     );
 
-    // Clean up tracking when the container stops on its own
+    // Clean up session when the container stops on its own
     container
       .wait()
-      .then(() => activeContainers.delete(container.id))
+      .then(() => delete sessions[sessionId])
       .catch(() => {});
 
-    res.json({ containerId: container.id, hostPort: parseInt(hostPort) });
+    res.json({ sessionId, containerName, hostPort: parseInt(hostPort) });
   } catch (err) {
     console.error("[gateway] Error creating container:", err.message);
     res.status(500).json({ error: err.message });
