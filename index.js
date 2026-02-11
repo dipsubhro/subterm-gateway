@@ -86,6 +86,39 @@ app.post("/api/container", async (req, res) => {
   }
 });
 
+// DELETE /api/container/:id — stop and destroy a sandbox container by sessionId
+app.delete("/api/container/:id", async (req, res) => {
+  const { id: sessionId } = req.params;
+  const session = sessions[sessionId];
+
+  if (!session) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  const { containerName } = session;
+
+  try {
+    const container = docker.getContainer(containerName);
+
+    // Stop the container; AutoRemove will delete it automatically.
+    // Force-kill if it doesn't stop within 5 s.
+    await container.stop({ t: 5 }).catch((err) => {
+      // 304 = container already stopped, 404 = already removed — both are fine
+      if (err.statusCode !== 304 && err.statusCode !== 404) throw err;
+    });
+
+    delete sessions[sessionId];
+
+    console.log(
+      `[gateway] Destroyed container ${containerName} (session ${sessionId})`,
+    );
+    res.json({ message: "Container destroyed", sessionId });
+  } catch (err) {
+    console.error("[gateway] Error destroying container:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>
   console.log(`[gateway] Listening on http://0.0.0.0:${PORT}`),
