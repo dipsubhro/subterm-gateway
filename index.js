@@ -58,8 +58,10 @@ app.post("/api/container", async (req, res) => {
     await container.start();
 
     const now = Date.now();
+    const workspacePath = `/workspace/${sessionId}/`;
     sessions[sessionId] = {
       containerName,
+      workspacePath,
       createdAt: now,
       lastActive: now,
     };
@@ -77,7 +79,7 @@ app.post("/api/container", async (req, res) => {
       .then(() => delete sessions[sessionId])
       .catch(() => {});
 
-    res.json({ sessionId, containerName, hostPort: parseInt(hostPort) });
+    res.json({ sessionId, workspacePath, hostPort: parseInt(hostPort) });
   } catch (err) {
     console.error("[gateway] Error creating container:", err.message);
     res.status(500).json({ error: err.message });
