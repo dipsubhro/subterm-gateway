@@ -86,6 +86,20 @@ app.post("/api/container", async (req, res) => {
   }
 });
 
+// GET /api/containers — list all active sessions
+app.get("/api/containers", (req, res) => {
+  const list = Object.entries(sessions).map(
+    ([sessionId, { containerName, workspacePath, createdAt, lastActive }]) => ({
+      sessionId,
+      containerName,
+      workspacePath,
+      createdAt,
+      lastActive,
+    }),
+  );
+  res.json({ count: list.length, sessions: list });
+});
+
 // GET /api/container/:id — return session metadata + live container status
 app.get("/api/container/:id", async (req, res) => {
   const { id: sessionId } = req.params;
