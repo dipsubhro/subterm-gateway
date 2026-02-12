@@ -86,6 +86,42 @@ app.post("/api/container", async (req, res) => {
   }
 });
 
+// GET /api/container/:id — return session metadata + live container status
+app.get("/api/container/:id", async (req, res) => {
+  const { id: sessionId } = req.params;
+  const session = sessions[sessionId];
+
+  if (!session) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  const { containerName, workspacePath, createdAt, lastActive } = session;
+
+  try {
+    const info = await docker.getContainer(containerName).inspect();
+    const status = info.State.Status; // "running" | "exited" | "paused" …
+    const hostPort =
+      info.NetworkSettings.Ports?.["3334/tcp"]?.[0]?.HostPort ?? null;
+
+    res.json({
+      sessionId,
+      containerName,
+      workspacePath,
+      status,
+      hostPort: hostPort ? parseInt(hostPort) : null,
+      createdAt,
+      lastActive,
+    });
+  } catch (err) {
+    // Container gone but session entry still exists
+    if (err.statusCode === 404) {
+      return res.status(410).json({ error: "Container no longer exists" });
+    }
+    console.error("[gateway] Error inspecting container:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/container/:id — stop and destroy a sandbox container by sessionId
 app.delete("/api/container/:id", async (req, res) => {
   const { id: sessionId } = req.params;
