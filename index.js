@@ -4,6 +4,7 @@ import crypto from "crypto";
 import express from "express";
 import cors from "cors";
 import Dockerode from "dockerode";
+import Redis from "ioredis";
 
 const app = express();
 app.use(express.json());
@@ -14,19 +15,55 @@ const docker = new Dockerode({
 });
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || "subterm-server";
 
-// sessionId → { containerName, createdAt, lastActive }
-const sessions = {};
+// --- Redis ---
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+redis.on("error", (err) => console.error("[redis] Error:", err.message));
+
+const SESSION_KEY = (id) => `session:${id}`;
+const SESSIONS_SET = "sessions";
+
+async function setSession(sessionId, data) {
+  await redis.set(SESSION_KEY(sessionId), JSON.stringify(data));
+  await redis.sadd(SESSIONS_SET, sessionId);
+}
+
+async function getSession(sessionId) {
+  const raw = await redis.get(SESSION_KEY(sessionId));
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function deleteSession(sessionId) {
+  await redis.del(SESSION_KEY(sessionId));
+  await redis.srem(SESSIONS_SET, sessionId);
+}
+
+async function getAllSessions() {
+  const ids = await redis.smembers(SESSIONS_SET);
+  if (ids.length === 0) return [];
+  const pipeline = redis.pipeline();
+  ids.forEach((id) => pipeline.get(SESSION_KEY(id)));
+  const results = await pipeline.exec();
+  return ids
+    .map((id, i) => {
+      const raw = results[i][1];
+      if (!raw) return null;
+      return { sessionId: id, ...JSON.parse(raw) };
+    })
+    .filter(Boolean);
+}
 
 async function shutdown() {
   console.log("[gateway] Shutting down — stopping all containers...");
+  const all = await getAllSessions();
   await Promise.allSettled(
-    Object.values(sessions).map(({ containerName }) =>
+    all.map(({ containerName }) =>
       docker
         .getContainer(containerName)
         .stop()
         .catch(() => {}),
     ),
   );
+  await redis.quit();
   console.log("[gateway] All containers stopped. Exiting.");
   process.exit(0);
 }
@@ -59,12 +96,12 @@ app.post("/api/container", async (req, res) => {
 
     const now = Date.now();
     const workspacePath = `/workspace/${sessionId}/`;
-    sessions[sessionId] = {
+    await setSession(sessionId, {
       containerName,
       workspacePath,
       createdAt: now,
       lastActive: now,
-    };
+    });
 
     const info = await container.inspect();
     const hostPort = info.NetworkSettings.Ports["3334/tcp"][0].HostPort;
@@ -76,7 +113,7 @@ app.post("/api/container", async (req, res) => {
     // Clean up session when the container stops on its own
     container
       .wait()
-      .then(() => delete sessions[sessionId])
+      .then(() => deleteSession(sessionId))
       .catch(() => {});
 
     res.json({ sessionId, workspacePath, hostPort: parseInt(hostPort) });
@@ -87,23 +124,20 @@ app.post("/api/container", async (req, res) => {
 });
 
 // GET /api/containers — list all active sessions
-app.get("/api/containers", (req, res) => {
-  const list = Object.entries(sessions).map(
-    ([sessionId, { containerName, workspacePath, createdAt, lastActive }]) => ({
-      sessionId,
-      containerName,
-      workspacePath,
-      createdAt,
-      lastActive,
-    }),
-  );
-  res.json({ count: list.length, sessions: list });
+app.get("/api/containers", async (req, res) => {
+  try {
+    const list = await getAllSessions();
+    res.json({ count: list.length, sessions: list });
+  } catch (err) {
+    console.error("[gateway] Error listing sessions:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/container/:id — return session metadata + live container status
 app.get("/api/container/:id", async (req, res) => {
   const { id: sessionId } = req.params;
-  const session = sessions[sessionId];
+  const session = await getSession(sessionId);
 
   if (!session) {
     return res.status(404).json({ error: "Session not found" });
@@ -139,7 +173,7 @@ app.get("/api/container/:id", async (req, res) => {
 // DELETE /api/container/:id — stop and destroy a sandbox container by sessionId
 app.delete("/api/container/:id", async (req, res) => {
   const { id: sessionId } = req.params;
-  const session = sessions[sessionId];
+  const session = await getSession(sessionId);
 
   if (!session) {
     return res.status(404).json({ error: "Session not found" });
@@ -157,7 +191,7 @@ app.delete("/api/container/:id", async (req, res) => {
       if (err.statusCode !== 304 && err.statusCode !== 404) throw err;
     });
 
-    delete sessions[sessionId];
+    await deleteSession(sessionId);
 
     console.log(
       `[gateway] Destroyed container ${containerName} (session ${sessionId})`,
