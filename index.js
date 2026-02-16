@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import Dockerode from "dockerode";
 import Redis from "ioredis";
+import { startInactivityWatcher } from "./timeout.js";
 
 const app = express();
 app.use(express.json());
@@ -53,6 +54,7 @@ async function getAllSessions() {
 }
 
 async function shutdown() {
+  clearInterval(cleanupTimer);
   console.log("[gateway] Shutting down — stopping all containers...");
   const all = await getAllSessions();
   await Promise.allSettled(
@@ -70,6 +72,8 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+const cleanupTimer = startInactivityWatcher(docker, getAllSessions, deleteSession);
 
 // POST /api/container — spin up a new sandbox container, return its host port
 app.post("/api/container", async (req, res) => {
