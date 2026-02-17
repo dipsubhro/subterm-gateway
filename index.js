@@ -15,6 +15,7 @@ const docker = new Dockerode({
   socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock",
 });
 const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || "subterm-server";
+const MAX_CONTAINERS = parseInt(process.env.MAX_CONTAINERS) || 10;
 
 // --- Redis ---
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
@@ -22,6 +23,28 @@ redis.on("error", (err) => console.error("[redis] Error:", err.message));
 
 const SESSION_KEY = (id) => `session:${id}`;
 const SESSIONS_SET = "sessions";
+const CONTAINER_COUNTER = "containers:active";
+
+// Atomically increment counter only if it is below the cap.
+// Returns the new count, or -1 if the cap would be exceeded.
+const LUA_RESERVE = `local cur = tonumber(redis.call('GET', KEYS[1]) or 0)
+  if cur >= tonumber(ARGV[1]) then return -1 end
+  return redis.call('INCR', KEYS[1])`;
+
+async function reserveContainerSlot() {
+  const result = await redis.eval(
+    LUA_RESERVE,
+    1,
+    CONTAINER_COUNTER,
+    MAX_CONTAINERS,
+  );
+  return result !== -1; // true = slot granted
+}
+
+async function releaseContainerSlot() {
+  const val = await redis.decr(CONTAINER_COUNTER);
+  if (val < 0) await redis.set(CONTAINER_COUNTER, 0); // guard against underflow
+}
 
 async function setSession(sessionId, data) {
   await redis.set(SESSION_KEY(sessionId), JSON.stringify(data));
@@ -36,6 +59,7 @@ async function getSession(sessionId) {
 async function deleteSession(sessionId) {
   await redis.del(SESSION_KEY(sessionId));
   await redis.srem(SESSIONS_SET, sessionId);
+  await releaseContainerSlot();
 }
 
 async function getAllSessions() {
@@ -73,11 +97,23 @@ async function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-const cleanupTimer = startInactivityWatcher(docker, getAllSessions, deleteSession);
+const cleanupTimer = startInactivityWatcher(
+  docker,
+  getAllSessions,
+  deleteSession,
+);
 
 // POST /api/container — spin up a new sandbox container, return its host port
 app.post("/api/container", async (req, res) => {
   try {
+    const granted = await reserveContainerSlot();
+    if (!granted) {
+      return res.status(503).json({
+        error: "Container limit reached",
+        detail: `Maximum of ${MAX_CONTAINERS} simultaneous containers allowed`,
+      });
+    }
+
     const NETWORK_NAME = process.env.SANDBOX_NETWORK || "subterm-net";
 
     // Cryptographically secure session ID
@@ -117,11 +153,13 @@ app.post("/api/container", async (req, res) => {
     // Clean up session when the container stops on its own
     container
       .wait()
-      .then(() => deleteSession(sessionId))
+      .then(() => deleteSession(sessionId)) // also releases the slot
       .catch(() => {});
 
     res.json({ sessionId, workspacePath, hostPort: parseInt(hostPort) });
   } catch (err) {
+    // If container creation failed after we reserved a slot, release it
+    await releaseContainerSlot().catch(() => {});
     console.error("[gateway] Error creating container:", err.message);
     res.status(500).json({ error: err.message });
   }
