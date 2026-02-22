@@ -124,11 +124,12 @@ app.post("/api/container", async (req, res) => {
       Image: SANDBOX_IMAGE,
       name: containerName,
       Tty: false,
-      ExposedPorts: { "3334/tcp": {} },
+      ExposedPorts: { "3000/tcp": {} },
+      Env: [`SESSION_ID=${sessionId}`, `WORKSPACE_PATH=/workspace`],
       HostConfig: {
-        PortBindings: { "3334/tcp": [{ HostPort: "0" }] }, // 0 = random port
         AutoRemove: true,
         NetworkMode: NETWORK_NAME,
+        // No PortBindings — all traffic routes via the internal Docker network
       },
     });
 
@@ -143,11 +144,8 @@ app.post("/api/container", async (req, res) => {
       lastActive: now,
     });
 
-    const info = await container.inspect();
-    const hostPort = info.NetworkSettings.Ports["3334/tcp"][0].HostPort;
-
     console.log(
-      `[gateway] Started container ${containerName} (${container.id.slice(0, 12)}) on host port ${hostPort}`,
+      `[gateway] Started container ${containerName} (${container.id.slice(0, 12)})`,
     );
 
     // Clean up session when the container stops on its own
@@ -156,7 +154,7 @@ app.post("/api/container", async (req, res) => {
       .then(() => deleteSession(sessionId)) // also releases the slot
       .catch(() => {});
 
-    res.json({ sessionId, workspacePath, hostPort: parseInt(hostPort) });
+    res.json({ sessionId, workspacePath });
   } catch (err) {
     // If container creation failed after we reserved a slot, release it
     await releaseContainerSlot().catch(() => {});
@@ -190,17 +188,12 @@ app.get("/api/container/:id", async (req, res) => {
   try {
     const info = await docker.getContainer(containerName).inspect();
     const status = info.State.Status; // "running" | "exited" | "paused" …
-    const hostPort =
-      info.NetworkSettings.Ports?.["3334/tcp"]?.[0]?.HostPort ?? null;
 
     res.json({
       sessionId,
       containerName,
       workspacePath,
       status,
-      hostPort: hostPort ? parseInt(hostPort) : null,
-      createdAt,
-      lastActive,
     });
   } catch (err) {
     // Container gone but session entry still exists
