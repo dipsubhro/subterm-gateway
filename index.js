@@ -120,7 +120,13 @@ app.post("/api/container", async (req, res) => {
     const sessionId = crypto.randomBytes(16).toString("hex");
     const containerName = `sess_${sessionId}`;
 
-    const container = await docker.createContainer({
+    const WORKSPACE_SIZE = process.env.CONTAINER_DISK_LIMIT || "1G";
+    const MEMORY_LIMIT =
+      parseInt(process.env.CONTAINER_MEMORY_MB || "512") * 1024 * 1024;
+    const CPU_CORES = parseFloat(process.env.CONTAINER_CPU_CORES || "1");
+    const PIDS_LIMIT = parseInt(process.env.CONTAINER_PIDS_LIMIT || "100");
+
+    const baseContainerConfig = {
       Image: SANDBOX_IMAGE,
       name: containerName,
       Tty: false,
@@ -130,8 +136,47 @@ app.post("/api/container", async (req, res) => {
         AutoRemove: true,
         NetworkMode: NETWORK_NAME,
         // No PortBindings — all traffic routes via the internal Docker network
+
+        // Workspace disk cap via tmpfs (works on any filesystem, including ext4)
+        Tmpfs: {
+          "/workspace": `rw,size=${WORKSPACE_SIZE},mode=755`,
+        },
+
+        // Resource limits — prevent runaway containers from affecting the host
+        Memory: MEMORY_LIMIT,
+        MemorySwap: MEMORY_LIMIT, // equal = no swap headroom
+        NanoCpus: Math.round(CPU_CORES * 1e9),
+        PidsLimit: PIDS_LIMIT,
       },
-    });
+    };
+
+    // Attempt StorageOpt disk quota (only works on xfs + pquota; graceful fallback otherwise)
+    const diskLimit = process.env.CONTAINER_DISK_LIMIT || "1G";
+    let container;
+    if (diskLimit) {
+      const configWithQuota = {
+        ...baseContainerConfig,
+        HostConfig: {
+          ...baseContainerConfig.HostConfig,
+          StorageOpt: { size: diskLimit },
+        },
+      };
+      try {
+        container = await docker.createContainer(configWithQuota);
+        console.log(
+          `[gateway] Container ${containerName} created with disk limit ${diskLimit}`,
+        );
+      } catch (quotaErr) {
+        // StorageOpt is not supported on this storage driver — create without quota
+        console.warn(
+          `[gateway] StorageOpt not supported (${quotaErr.message}), ` +
+            "falling back — workspace capped via tmpfs.",
+        );
+        container = await docker.createContainer(baseContainerConfig);
+      }
+    } else {
+      container = await docker.createContainer(baseContainerConfig);
+    }
 
     await container.start();
 
