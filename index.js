@@ -283,7 +283,7 @@ app.delete("/api/container/:id", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 4500;
 app.listen(PORT, () =>
   console.log(`[gateway] Listening on http://0.0.0.0:${PORT}`),
 );
