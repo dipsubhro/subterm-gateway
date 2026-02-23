@@ -130,9 +130,6 @@ app.post("/api/container", async (req, res) => {
         AutoRemove: true,
         NetworkMode: NETWORK_NAME,
         // No PortBindings — all traffic routes via the internal Docker network
-        StorageOpt: {
-          size: process.env.SANDBOX_STORAGE_LIMIT || "500m",
-        },
       },
     });
 
