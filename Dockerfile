@@ -12,8 +12,10 @@ RUN pnpm install --frozen-lockfile --prod
 # Copy source
 COPY index.js timeout.js ./
 
-# Non-root user
+# Non-root user — add to docker group so it can access /var/run/docker.sock
 RUN useradd -m appuser \
+  && groupadd -f docker \
+  && usermod -aG docker appuser \
   && chown -R appuser:appuser /app
 USER appuser
 
