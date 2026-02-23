@@ -136,7 +136,7 @@ app.post("/api/container", async (req, res) => {
     await container.start();
 
     const now = Date.now();
-    const workspacePath = `/workspace/${sessionId}/`;
+    const workspacePath = `/`;
     await setSession(sessionId, {
       containerName,
       workspacePath,
