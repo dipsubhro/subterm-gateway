@@ -9,7 +9,22 @@ import { startInactivityWatcher } from "./timeout.js";
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || "http://localhost:5173" }));
+
+const rawOrigins = process.env.CLIENT_ORIGIN || "http://localhost:5173";
+const allowedOrigins = rawOrigins.split(",").map((o) => o.trim());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, Postman, server-to-server)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
+    credentials: true,
+  }),
+);
 
 const docker = new Dockerode({
   socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock",
@@ -120,7 +135,9 @@ app.post("/api/container", async (req, res) => {
     const sessionId = crypto.randomBytes(16).toString("hex");
     const containerName = `sess_${sessionId}`;
 
-    const WORKSPACE_SIZE = process.env.CONTAINER_DISK_LIMIT || "1G";
+    const WORKSPACE_SIZE = (
+      process.env.CONTAINER_DISK_LIMIT || "1G"
+    ).toLowerCase();
     const MEMORY_LIMIT =
       parseInt(process.env.CONTAINER_MEMORY_MB || "512") * 1024 * 1024;
     const CPU_CORES = parseFloat(process.env.CONTAINER_CPU_CORES || "1");
@@ -275,6 +292,36 @@ app.delete("/api/container/:id", async (req, res) => {
 
     console.log(
       `[gateway] Destroyed container ${containerName} (session ${sessionId})`,
+    );
+    res.json({ message: "Container destroyed", sessionId });
+  } catch (err) {
+    console.error("[gateway] Error destroying container:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/container/:id/destroy — same as DELETE but via POST
+// navigator.sendBeacon (used on page unload) can only send POST requests
+app.post("/api/container/:id/destroy", async (req, res) => {
+  const { id: sessionId } = req.params;
+  const session = await getSession(sessionId);
+
+  if (!session) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  const { containerName } = session;
+
+  try {
+    const container = docker.getContainer(containerName);
+    await container.stop({ t: 5 }).catch((err) => {
+      if (err.statusCode !== 304 && err.statusCode !== 404) throw err;
+    });
+
+    await deleteSession(sessionId);
+
+    console.log(
+      `[gateway] Destroyed container ${containerName} via beacon (session ${sessionId})`,
     );
     res.json({ message: "Container destroyed", sessionId });
   } catch (err) {
