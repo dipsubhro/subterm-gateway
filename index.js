@@ -156,7 +156,7 @@ app.post("/api/container", async (req, res) => {
 
         // Workspace disk cap via tmpfs (works on any filesystem, including ext4)
         Tmpfs: {
-          "/workspace": `rw,size=${WORKSPACE_SIZE},mode=755`,
+          "/workspace": `rw,size=${WORKSPACE_SIZE},uid=1001,gid=1001,mode=755`,
         },
 
         // Resource limits — prevent runaway containers from affecting the host
