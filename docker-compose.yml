@@ -1,0 +1,48 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: subterm-redis
+    networks:
+      - subterm-net
+    restart: unless-stopped
+
+  gateway:
+    image: subterm-gateway
+    container_name: subterm-gateway
+    networks:
+      - subterm-net
+    ports:
+      - "4500:4500"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      PORT: 4500
+      REDIS_URL: redis://subterm-redis:6379
+      SANDBOX_NETWORK: subterm-net
+      SANDBOX_IMAGE: subterm-server
+      CLIENT_ORIGIN: http://141.148.219.221
+      MAX_CONTAINERS: 10
+      CONTAINER_MEMORY_MB: 512
+      CONTAINER_CPU_CORES: 1
+      CONTAINER_DISK_LIMIT: 1G
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  router:
+    image: subterm-router
+    container_name: subterm-router
+    networks:
+      - subterm-net
+    ports:
+      - "5500:5500"
+    environment:
+      PORT: 5500
+      REDIS_URL: redis://subterm-redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+networks:
+  subterm-net:
+    external: true
