@@ -20,7 +20,7 @@ services:
       REDIS_URL: redis://subterm-redis:6379
       SANDBOX_NETWORK: subterm-net
       SANDBOX_IMAGE: subterm-server
-      CLIENT_ORIGIN: http://141.148.219.221
+      CLIENT_ORIGIN: http://141.148.219.221,http://localhost:5173
       MAX_CONTAINERS: 10
       CONTAINER_MEMORY_MB: 512
       CONTAINER_CPU_CORES: 1
